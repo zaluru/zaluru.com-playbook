@@ -1,0 +1,23 @@
+---
+- name: "Create users"
+  user:
+    user: "{{ user.username }}"
+    groups: "{{ user.groups }}"
+    password: "{{ user.password }}"
+    shell: "{{ user.shell | default('/bin/bash') }}"
+    append: yes
+    state: present
+  become: true
+
+- name: Add hcloud authorized keys
+  include_tasks: ./hcloud_public_key.yml
+  loop: "{{ user.hcloud_public_keys }}"
+  loop_control:
+    loop_var: hcloud_public_key
+  when: user.hcloud_public_keys is defined
+- name: "Add authorized keys"
+  authorized_key:
+    user: "{{ user.username }}"
+    key: "{{ item }}"
+  loop: "{{ user.public_keys }}"
+  become: true

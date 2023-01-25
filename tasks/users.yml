@@ -1,0 +1,6 @@
+---
+- name: Setup users
+  include_tasks: ./user.yml
+  loop: "{{ admin_users }}"
+  loop_control:
+    loop_var: user

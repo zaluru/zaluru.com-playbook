@@ -1,0 +1,44 @@
+---
+- name: Determine remote address
+  set_fact:
+    ansible_user__connect_to: "{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
+
+- name: Set SSH username to vagrant
+  set_fact:
+    ansible_ssh_user: vagrant
+  when: "'vagrant' in inventory_hostname"
+  changed_when: false
+  delegate_to: localhost
+
+- name: Set SSH username to ansible
+  set_fact:
+    ansible_ssh_user: ansible
+  when: "'vagrant' not in inventory_hostname"
+  changed_when: false
+  delegate_to: localhost
+
+- block:
+  - name: Check SSH connection to verify {{ ansible_ssh_user }} user
+    wait_for_connection:
+      timeout: 5
+    register: ansible_user__check_command_output
+    check_mode: no
+    changed_when: false
+  rescue:
+    - name: Display unitialized or unreachable hosts
+      debug:
+        msg: "Hostname {{ inventory_hostname }} is not initialized"
+
+- name: Set SSH username to root
+  set_fact:
+    ansible_ssh_user: root
+  changed_when: false
+  when: ansible_user__check_command_output.failed == true
+
+- name: Check SSH connection to identify unreachable hosts and fail early
+  wait_for_connection:
+    timeout: 5
+  check_mode: no
+  changed_when: false
+
+- include_tasks: ./users.yml

@@ -1,0 +1,55 @@
+---
+- name: hcloud firewall rules
+  connection: local
+  block:
+    - name: Allow all adresses to connect to ssh
+      block:
+        - name: Allow all adresses to connect to ssh
+          hetzner.hcloud.hcloud_firewall:
+            api_token: "{{ hcloud_token }}"
+            name: ssh
+            rules:
+              - direction: in
+                port: 22
+                protocol: tcp
+                source_ips:
+                  - 0.0.0.0/0
+                  - ::/0
+                description: allow ssh
+            state: present
+        - name: Add the ssh firewall to hosts firewall list
+          set_fact:
+            hcloud_firewalls: "{{ hcloud_firewalls + [ 'ssh' ] }}"
+      when: bastion_host is not defined
+    - name: Bastion host
+      vars:
+        bastion_ips: []
+      block:
+        - name: Get the ip of the bastion host
+          hcloud_server_info:
+            name: "{{ bastion_host }}"
+            api_token: "{{ hcloud_token }}"
+          register: bastion_info
+        - name: Add the ips to a single list
+          set_fact:
+            bastion_ips: "{{ bastion_ips + [item] }}"
+          with_items:
+            - "{{bastion_info.hcloud_server_info | map(attribute='ipv4_address') | product(['/32']) | map('join') | list }}"
+            - "{{bastion_info.hcloud_server_info | map(attribute='ipv6') }}"
+        - debug:
+            msg: "{{ bastion_info }}"
+        - name: Allow ssh connections from a bastion host - "{{ bastion_host }}"
+          hetzner.hcloud.hcloud_firewall:
+            api_token: "{{ hcloud_token }}"
+            name: "ssh_{{ bastion_host }}"
+            rules:
+              - direction: in
+                port: 22
+                protocol: tcp
+                source_ips: "{{ bastion_ips }}"
+                description: allow ssh
+            state: present
+        - name: Add the ssh firewall to hosts firewall list
+          set_fact:
+            hcloud_firewalls: "{{ hcloud_firewalls + [ 'ssh_' + bastion_host ] }}"
+      when: bastion_host is defined

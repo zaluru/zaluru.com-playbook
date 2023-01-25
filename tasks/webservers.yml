@@ -1,0 +1,179 @@
+---
+- name: Install required packages
+  apt:
+    name:
+      - nginx
+      - podman
+      - git
+    update_cache: true
+    state: present
+  become: true
+  # TODO research how to set up a rootles podman on a server with a system account
+  # https://blog.christophersmart.com/2021/02/20/rootless-podman-containers-under-system-accounts-managed-and-enabled-at-boot-with-systemd/
+  #
+  #
+- name: "Remove the old {{ domain_name }}-build container"
+  containers.podman.podman_container:
+    name: "{{ domain_name }}-build"
+    state: absent
+  become: true
+- name: Get the website container image
+  block:
+    - name: Check if website_container_image is defined
+      ansible.builtin.command: /bin/false
+      when: website_container_image is not defined
+    - name: Pull the website container image
+      containers.podman.podman_image:
+        name: "{{ website_container_image }}"
+        force: true
+      become: true
+  rescue:
+    - name: Pull the node latest image
+      containers.podman.podman_image:
+        name: docker.io/library/node:latest
+      become: true
+    - name: "Create /opt/{{ domain_name }} directory for storing the websites source code"
+      ansible.builtin.file:
+        path: "/opt/{{ domain_name }}"
+        state: directory
+        owner: root
+        group: root
+      become: true
+    - name: Clone website source code
+      ansible.builtin.git:
+        repo: "{{ website_git_repo }}"
+        dest: "/opt/{{ domain_name }}"
+        single_branch: yes
+        version: main
+      become: true
+    - name: Build the website conatiner image
+      containers.podman.podman_image:
+        name: "{{ domain_name }}-build"
+        path: "/opt/{{ domain_name }}"
+        build:
+          file: "/opt/{{ domain_name }}/Containerfile"
+        force: true
+      become: true
+- name: "Create /opt/{{ domain_name }}/dist for storing the built website"
+  ansible.builtin.file:
+    path: "/opt/{{ domain_name }}/dist"
+    state: directory
+    owner: www-data
+    group: www-data
+  become: true
+- name: Build the astro website
+  containers.podman.podman_container:
+    name: "{{ domain_name }}-build"
+    image: "{{ website_container_image | default(domain_name + '-build') }}"
+    state: started
+    detach: false
+    command: "npm run build"
+    volumes: "/opt/{{ domain_name }}/dist:/app/dist"
+  become: true
+- name: Wait for the build to be completed
+  shell: |
+    podman container inspect {{ domain_name }}-build | grep "Running\": false"
+  register: logg
+  ignore_errors: true
+  changed_when: false
+  until: logg.rc == 0
+  retries: 120
+  delay: 2
+  become: true
+  # otherwise next run will use the same container
+- name: "Remove the old /var/www/{{ domain_name }}"
+  ansible.builtin.file:
+    path: "/var/www/{{ domain_name }}/"
+    state: absent
+  become: true
+- name: "Create /var/www/{{ domain_name }} for storing the published website"
+  ansible.builtin.file:
+    path: "/var/www/{{ domain_name }}/"
+    state: directory
+    owner: www-data
+    group: www-data
+  become: true
+- name: "Copy the built website to /var/www/{{ domain_name }}"
+  copy:
+    src: "/opt/{{ domain_name }}/dist/"
+    dest: "/var/www/{{ domain_name }}/"
+    owner: www-data
+    group: www-data
+    remote_src: true
+  become: true
+- name: "Copy the nginx configuration"
+  copy:
+    src: "files/nginx/"
+    dest: "/etc/nginx/"
+  register: nginx_configuration_status
+  become: true
+# Generated with
+# openssl dhparam -out /etc/nginx/dhparam.pem 4096
+- name: Copy dhparam.pem
+  copy:
+    # TODO move from files to gopass/ansible vault
+    src: "files/secrets/dhparam.pem"
+    dest: "/etc/nginx/dhparam.pem"
+  become: true
+- name: Create a common ACME-challenge directory (for Let's Encrypt)
+  ansible.builtin.file:
+    path: "/var/www/_letsencrypt"
+    state: directory
+    owner: www-data
+    group: www-data
+  become: true
+- name: Reconfigure nginx
+  block:
+    # Done as instructed by digitaloceans nginxconfig - step certbot
+    - name: Comment out SSL related directives in the configuration
+      shell: |
+        sed -i -r 's/(listen .*443)/\1; #/g; s/(ssl_(certificate|certificate_key|trusted_certificate) )/#;#\1/g; s/(server \{)/\1\n    ssl off;/g' /etc/nginx/sites-available/*.conf
+      become: true
+    #- name: Test nginx configuration
+      #shell: /usr/sbin/nginx -t
+      #register: test_nginx_config
+      #changed_when: False
+      #become: true
+    #- name: Reload nginx
+      #ansible.builtin.service:
+        #name: nginx
+        #state: reloaded
+      #changed_when: False
+      #become: true
+      # TODO check if nginx should run or not, the above comments should work but for some reason nginx -t fails becouse it wants a cert key but it does not exist yet
+      # TODO might change the command in inventory to disable "standalone"
+    - name: Stop nginx
+      ansible.builtin.service:
+        name: nginx
+        state: stopped
+      changed_when: False
+      become: true
+    - include_role:
+        name: geerlingguy.certbot
+        apply: {
+          become: true
+          }
+    - name: Uncomment SSL related directives in the configuration
+      shell: |
+        sed -i -r -z 's/#?; ?#//g; s/(server \{)\n    ssl off;/\1/g' /etc/nginx/sites-available/*.conf
+      become: true
+    - name: Configure Certbot to reload NGINX when it successfully renews certificates
+      copy:
+        dest: "/etc/letsencrypt/renewal-hooks/post/nginx-reload.sh"
+        content: |
+          #!/bin/bash
+          nginx -t && systemctl reload nginx
+      become: true
+  #when: nginx_configuration_status.changed
+  when: nginx_configuration_status
+- name: Test nginx configuration
+  shell: /usr/sbin/nginx -t
+  register: test_nginx_config
+  changed_when: False
+  become: true
+- name: Restart nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+  changed_when: False
+  become: true

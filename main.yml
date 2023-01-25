@@ -1,0 +1,72 @@
+---
+- hosts: all
+  gather_facts: no
+  pre_tasks:
+    - name: "Make sure server exists"
+      connection: local
+      hcloud_server:
+        api_token: "{{ hcloud_token }}"
+        name: "{{ server_name }}"
+        server_type: "{{ hcloud_server_type }}"
+        image: "{{ hcloud_image }}"
+        ipv4: "{{ hcloud_primary_ipv4 | default( omit )}}"
+        ipv6: "{{ hcloud_primary_ipv6 | default( omit ) }}"
+        location: "{{ hcloud_location }}"
+        ssh_keys: "{{ hcloud_ssh_keys }}"
+        state: present
+      tags: ['always']
+##-------------------------------
+## Firewalls
+##------------------------------
+      # We can define what additional firewalls will be used in the inventory file
+      # we need to define hcloud_firewalls before we can run tasks related to hcloud firewalls
+    - name: "Initialize a hcloud_firewalls list"
+      set_fact:
+        hcloud_firewalls: []
+      when: hcloud_firewalls is undefined
+
+- hosts: webservers
+  gather_facts: no
+  tasks:
+    - import_tasks: tasks/firewall/webservers.yml
+      tags: ['firewall']
+
+- hosts: all
+  gather_facts: no
+  tasks:
+    - import_tasks: tasks/firewall/ssh.yml
+      tags: ['firewall']
+    - import_tasks: tasks/firewall/hcloud_apply.yml
+      tags: ['firewall']
+
+##-------------------------------
+## Init
+##-------------------------------
+- hosts: all
+  gather_facts: no
+  pre_tasks:
+    - import_tasks: tasks/init.yml
+      tags: ['init', 'never']
+    - name: Gather facts
+      ansible.builtin.setup:
+    - import_tasks: tasks/users.yml
+      tags: ['users']
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      become: true
+
+
+- hosts: all
+  roles:
+    - role: geerlingguy.security
+      become: true
+      tags: ['security']
+
+##-------------------------------
+## Webserver
+##-------------------------------
+- hosts: webservers
+  tasks:
+    - import_tasks: tasks/webservers.yml
+      tags: ["webservers"]

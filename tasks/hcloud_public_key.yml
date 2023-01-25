@@ -1,0 +1,14 @@
+---
+- name: Gather hcloud ssh public key
+  connection: local
+  hetzner.hcloud.hcloud_ssh_key_info:
+    name: "{{ hcloud_public_key }}"
+    api_token: "{{ hcloud_token }}"
+  register: hcloud_public_key_info
+- name: Add hcloud keys to authorized keys
+  authorized_key:
+    user: "{{ user.username }}"
+    key: "{{ item }}"
+  loop: "{{ hcloud_public_key_info.hcloud_ssh_key_info | map(attribute='public_key') }}"
+
+  become: true

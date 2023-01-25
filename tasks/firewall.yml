@@ -1,0 +1,20 @@
+---
+- hosts: all
+  gather_facts: no
+  tasks:
+  - name: "Initialize a hcloud_firewalls list"
+    set_fact:
+      hcloud_firewalls: []
+    when: hcloud_firewalls is undefined
+  - import_tasks: tasks/firewall/ssh.yml
+    tags: ['firewall', 'ssh']
+- hosts: webservers
+  gather_facts: no
+  tasks:
+    - import_tasks: tasks/firewall/webservers.yml
+      tags: ['firewall']
+- hosts: all
+  gather_facts: no
+  tasks:
+    - import_tasks: tasks/firewall/hcloud_apply.yml
+      tags: ['firewall']
